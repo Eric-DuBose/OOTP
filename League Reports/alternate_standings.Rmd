@@ -1,0 +1,273 @@
+---
+title: "League Stats"
+author: "Eric DuBose"
+date: "11/6/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+library(tidyverse)
+library(googlesheets4)
+library(gargle)
+library(lubridate)
+options(gargle_oauth_cache = '.secrets')
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+league <- 'PBC'
+season <- 2029
+curr_date <- '2029-10-01'
+league_al_name <- 'AL' 
+league_nl_name <- 'NL'
+```
+
+
+```{r}
+# Google Sheet filenames. References where the league will upload data
+dir <- "~/Out of the Park Developments/OOTP Baseball 21/saved_games/PBC.lg/import_export/csv/"
+act_league <- 146
+act_sheet <- '1cnN2URqvyCyvowX0KZvQcnIk8ISP8wodsPhbzHRMVwY'
+opening_day <- '2029-04-02'
+
+# Dataset import from the CSV files in the file directory based off of league selection. 
+
+files<-list.files(path = dir, pattern=".csv$")
+data<-list()
+for (i in 1:length(files)){
+data[[i]]<-read.csv(paste0(dir,files[i]))}
+names(data)<-files
+```
+
+```{r}
+
+teams <- data$teams.csv %>%
+  filter(league_id == act_league, team_id < 80) %>%
+  mutate(
+    league = case_when(sub_league_id == 0 ~ league_al_name, sub_league_id == 1 ~ league_nl_name),
+    division = division_id,
+    name = paste0(name," ",nickname)
+    ) %>%
+  select(team_id,name,league,division) %>%
+  arrange(league, division, name)
+
+home <- data$games.csv %>%
+  filter(league_id == act_league, as.Date(date) <= as.Date(curr_date), as.Date(date) >= as.Date(opening_day), game_type == 0) %>%
+  mutate(
+    home_id = home_team,
+    runs_home = runs1,
+    hits_home = hits1,
+    errors_home = errors1,
+    date = as.Date(date)) %>%
+  select(game_id, home_id, date, runs_home, hits_home, errors_home, innings)
+
+
+away <- data$games.csv %>%
+  filter(league_id == act_league, as.Date(date) <= as.Date(curr_date), as.Date(date) >= as.Date(opening_day), game_type == 0) %>%
+  mutate(
+    away_id = away_team,
+    runs_away = runs0,
+    hits_away = hits0,
+    errors_away = errors0,
+    date = as.Date(date)) %>%
+  select(game_id, away_id, runs_away, hits_away, errors_away)
+
+games <- home %>%
+  left_join(away, by = 'game_id') %>%
+  left_join(teams, by = c("home_id" = "team_id")) %>%
+  left_join(teams, by = c("away_id" = "team_id")) %>%
+  filter(date <= curr_date) 
+
+games_final <- home %>%
+  left_join(away, by = 'game_id') %>%
+  left_join(teams, by = c("home_id" = "team_id")) %>%
+  left_join(teams, by = c("away_id" = "team_id")) %>%
+  filter(date <= curr_date) %>%
+  mutate(
+    home_team = name.x,
+    away_team = name.y,
+    home_win = case_when(runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_loss = case_when(runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_win = case_when(runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_loss = case_when(runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_div_win = case_when(division.x == division.y & league.x == league.y & runs_home > runs_away ~ 1, TRUE ~ 0 ),
+    home_div_loss = case_when(division.x == division.y & league.x == league.y & runs_home < runs_away ~ 1, TRUE ~ 0 ),
+    away_div_win = case_when(division.x == division.y & league.x == league.y & runs_home < runs_away ~ 1, TRUE ~ 0 ),
+    away_div_loss = case_when(division.x == division.y & league.x == league.y & runs_home > runs_away ~ 1, TRUE ~ 0 ),
+    home_conf_win = case_when(league.x == league.y & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_conf_loss = case_when(league.x == league.y & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_conf_win = case_when(league.x == league.y & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_conf_loss = case_when(league.x == league.y & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_inter_win = case_when(league.x != league.y & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_inter_loss = case_when(league.x != league.y & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_inter_win = case_when(league.x != league.y & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_inter_loss = case_when(league.x != league.y & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_extra_win = case_when(innings > 9 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_extra_loss = case_when(innings > 9 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_extra_win = case_when(innings > 9 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_extra_loss = case_when(innings > 9 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_one_win = case_when(abs(runs_home - runs_away) == 1 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_one_loss = case_when(abs(runs_home - runs_away) == 1 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_one_win = case_when(abs(runs_home - runs_away) == 1 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_one_loss = case_when(abs(runs_home - runs_away) == 1 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_two_win = case_when(abs(runs_home - runs_away) == 2 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_two_loss = case_when(abs(runs_home - runs_away) == 2 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_two_win = case_when(abs(runs_home - runs_away) == 2 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_two_loss = case_when(abs(runs_home - runs_away) == 2 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_three_win = case_when(abs(runs_home - runs_away) == 3 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_three_loss = case_when(abs(runs_home - runs_away) == 3 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_three_win = case_when(abs(runs_home - runs_away) == 3 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_three_loss = case_when(abs(runs_home - runs_away) == 3 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_four_win = case_when(abs(runs_home - runs_away) > 3 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_four_loss = case_when(abs(runs_home - runs_away) > 3 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_four_win = case_when(abs(runs_home - runs_away) > 3 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_four_loss = case_when(abs(runs_home - runs_away) > 3 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_runs_scored = runs_home,
+    home_runs_allowed = runs_away,
+    away_runs_scored = runs_away,
+    away_runs_allowed = runs_home,
+    home_hits_scored = hits_home,
+    home_hits_allowed = hits_away,
+    away_hits_scored = hits_away,
+    away_hits_allowed = hits_home,
+    home_errors_scored = errors_home,
+    home_errors_allowed = errors_away,
+    away_errors_scored = errors_away,
+    away_errors_allowed = errors_home,
+    gap = abs(runs_home - runs_away),
+    extras = case_when(innings > 9 ~ 1, innings <=9 ~ 0),
+    kchome = case_when(home_id == 43~1, home_id != 43~0),
+    kcaway = case_when(away_id == 43~1, away_id != 43~0)) %>%
+  select(-home_id, -away_id, -name.x, -league.x, -division.x, -name.y, -league.y, -division.y)
+
+games_final_edit <- games_final %>%
+  mutate(
+    home_wins = case_when(kchome == 1 ~ 0, kcaway == 1 ~ 1, kchome == 0 & kcaway == 0  ~ home_win),
+    home_losses = case_when(kchome == 1 ~ 1, kcaway == 1 ~ 0, kchome == 0 & kcaway == 0  ~ home_loss),
+    away_wins = case_when(kchome == 1 ~ 1, kcaway == 1 ~ 0, kchome == 0 & kcaway == 0 ~ away_win),
+    away_losses = case_when(kchome == 1 ~ 0, kcaway == 1 ~ 1, kchome == 0 & kcaway == 0 ~ away_loss),
+    
+    home_div_wins = case_when(kchome == 1 ~ 0, kcaway == 1 ~ 1, kchome == 0 & kcaway == 0  ~ home_div_win),
+    home_div_losses = case_when(kchome == 1 ~ 1, kcaway == 1 ~ 0, kchome == 0 & kcaway == 0  ~ home_div_loss),
+    away_div_wins = case_when(kchome == 1 ~ 1, kcaway == 1 ~ 0, kchome == 0 & kcaway == 0 ~ away_div_win),
+    away_div_losses = case_when(kchome == 1 ~ 0, kcaway == 1 ~ 1, kchome == 0 & kcaway == 0 ~ away_div_loss),
+    
+    home_conf_wins = case_when(kchome == 1 ~ 0, kcaway == 1 ~ 1, kchome == 0 & kcaway == 0  ~ home_conf_win),
+    home_conf_losses = case_when(kchome == 1 ~ 1, kcaway == 1 ~ 0, kchome == 0 & kcaway == 0  ~ home_conf_loss),
+    away_conf_wins = case_when(kchome == 1 ~ 1, kcaway == 1 ~ 0, kchome == 0 & kcaway == 0 ~ away_conf_win),
+    away_conf_losses = case_when(kchome == 1 ~ 0, kcaway == 1 ~ 1, kchome == 0 & kcaway == 0 ~ away_conf_loss),
+    
+    home_inter_wins = case_when(kchome == 1 ~ 0, kcaway == 1 ~ 1, kchome == 0 & kcaway == 0  ~ home_inter_win),
+    home_inter_losses = case_when(kchome == 1 ~ 1, kcaway == 1 ~ 0, kchome == 0 & kcaway == 0  ~ home_inter_loss),
+    away_inter_wins = case_when(kchome == 1 ~ 1, kcaway == 1 ~ 0, kchome == 0 & kcaway == 0 ~ away_inter_win),
+    away_inter_losses = case_when(kchome == 1 ~ 0, kcaway == 1 ~ 1, kchome == 0 & kcaway == 0 ~ away_inter_loss),
+
+    home_extra_wins = case_when(kchome == 1 ~ 0, kchome == 0 ~ home_extra_win),
+    home_extra_losses = case_when(kchome == 1 ~ 1, kchome == 0 ~ home_extra_loss),
+    away_extra_wins = case_when(kcaway == 1 ~ 0, kcaway == 0 ~ away_extra_win),
+    away_extra_losses = case_when(kcaway == 1 ~ 1, kcaway == 0 ~ away_extra_loss),
+    
+    home_one_wins = case_when(kchome == 1 ~ 0, kchome == 0 ~ home_one_win),
+    home_one_losses = case_when(kchome == 1 ~ 1, kchome == 0 ~ home_one_loss),
+    away_one_wins = case_when(kcaway == 1 ~ 0, kcaway == 0 ~ away_one_win),
+    away_one_losses = case_when(kcaway == 1 ~ 1, kcaway == 0 ~ away_one_loss),
+    
+    home_two_wins = case_when(kchome == 1 ~ 0, kchome == 0 ~ home_two_win),
+    home_two_losses = case_when(kchome == 1 ~ 1, kchome == 0 ~ home_two_loss),
+    away_two_wins = case_when(kcaway == 1 ~ 0, kcaway == 0 ~ away_two_win),
+    away_two_losses = case_when(kcaway == 1 ~ 1, kcaway == 0 ~ away_two_loss),
+
+    home_three_wins = case_when(kchome == 1 ~ 0, kchome == 0 ~ home_three_win),
+    home_three_losses = case_when(kchome == 1 ~ 1, kchome == 0 ~ home_three_loss),
+    away_three_wins = case_when(kcaway == 1 ~ 0, kcaway == 0 ~ away_three_win),
+    away_three_losses = case_when(kcaway == 1 ~ 1, kcaway == 0 ~ away_three_loss),
+
+    home_four_wins = case_when(kchome == 1 ~ 0, kchome == 0 ~ home_four_win),
+    home_four_losses = case_when(kchome == 1 ~ 1, kchome == 0 ~ home_four_loss),
+    away_four_wins = case_when(kcaway == 1 ~ 0, kcaway == 0 ~ away_four_win),
+    away_four_losses = case_when(kcaway == 1 ~ 1, kcaway == 0 ~ away_four_loss),
+  )
+
+
+home_standings <- games_final_edit %>%
+  select(contains("home")) %>%
+  group_by(home_team) %>%
+  summarise_if(is.numeric,sum) %>%
+   mutate(
+    team = home_team,
+    wins = home_wins,
+    losses = home_losses,
+    runs_scored = home_runs_scored,
+    runs_allowed = home_runs_allowed,
+    run_diff = home_runs_scored - home_runs_allowed,
+    hits = home_hits_scored,
+    hits_allowed = home_hits_allowed,
+    errors = home_errors_scored,
+    errors_allowed = home_errors_allowed,
+    div_wins = home_div_wins,
+    div_loss = home_div_losses,
+    conf_wins = home_conf_wins,
+    conf_loss = home_conf_losses,
+    interleague_win = home_inter_wins,
+    interleague_loss = home_inter_losses,
+    one_run_win = home_one_wins,
+    one_run_loss = home_one_losses,
+    two_run_win = home_two_wins,
+    two_run_loss = home_two_losses,
+    three_run_win = home_three_wins,
+    three_run_loss = home_three_losses,
+    four_run_win = home_four_wins,
+    four_run_loss = home_four_losses,
+    extra_wins = home_extra_wins, 
+    extra_loss = home_extra_losses) %>%
+  select(team, wins, losses, runs_scored, runs_allowed, run_diff, hits, hits_allowed, errors, errors_allowed, div_wins, div_loss, conf_wins, conf_loss, interleague_win, interleague_loss, one_run_win, one_run_loss, two_run_win, two_run_loss, three_run_win, three_run_loss, four_run_win, four_run_loss, extra_wins, extra_loss) %>%
+  arrange(team)
+
+away_standings <- games_final_edit %>%
+  select(contains("away")) %>%
+  group_by(away_team) %>%
+  summarise_if(is.numeric,sum) %>%
+   mutate(
+    team = away_team,
+    wins = away_wins,
+    losses = away_losses,
+    runs_scored = away_runs_scored,
+    runs_allowed = away_runs_allowed,
+    run_diff = away_runs_scored - away_runs_allowed,
+    hits = away_hits_scored,
+    hits_allowed = away_hits_allowed,
+    errors = away_errors_scored,
+    errors_allowed = away_errors_allowed,
+    div_wins = away_div_wins,
+    div_loss = away_div_losses,
+    conf_wins = away_conf_wins,
+    conf_loss = away_conf_losses,
+    interleague_win = away_inter_wins,
+    interleague_loss = away_inter_losses,
+    one_run_win = away_one_wins,
+    one_run_loss = away_one_losses,
+    two_run_win = away_two_wins,
+    two_run_loss = away_two_losses,
+    three_run_win = away_three_wins,
+    three_run_loss = away_three_losses,
+    four_run_win = away_four_wins,
+    four_run_loss = away_four_losses,
+    extra_wins = away_extra_wins, 
+    extra_loss = away_extra_losses) %>%
+  select(team, wins, losses, runs_scored, runs_allowed, run_diff, hits, hits_allowed, errors, errors_allowed, div_wins, div_loss, conf_wins, conf_loss, interleague_win, interleague_loss, one_run_win, one_run_loss, two_run_win, two_run_loss, three_run_win, three_run_loss, four_run_win, four_run_loss, extra_wins, extra_loss) %>%
+  arrange(team)
+
+league_standings <- merge(home_standings, away_standings, all = TRUE) %>%
+  group_by(team) %>%
+  summarise_if(is.numeric, sum)
+
+
+sheet_write(home_standings, ss = act_sheet, sheet = 'Home Standings Data')
+sheet_write(away_standings, ss = act_sheet, sheet = 'Away Standings Data')
+sheet_write(league_standings, ss = act_sheet, sheet = 'League Standings Data')
+
+
+```
+
+

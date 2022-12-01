@@ -1,0 +1,502 @@
+---
+title: "League Stats"
+author: "Eric DuBose"
+date: "11/6/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+library(psycho)
+library(tidyverse)
+library(googlesheets4)
+library(gargle)
+library(lubridate)
+options(gargle_oauth_cache = '.secrets')
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+league <- 'NBC'
+season <- 2023
+<<<<<<< HEAD
+curr_date <- '2023-06-20'
+=======
+curr_date <- '2023-07-11'
+>>>>>>> 151a0e1379c38cdacf1596cee2de602067d43bb3
+league_al_name <- 'AL' 
+league_nl_name <- 'NL'
+
+# NBC Tournament only. This needs to be updated once annually
+tourney_start <- '2023-07-04'
+tourney_end <- '2023-07-25'
+
+```
+
+
+```{r}
+# Google Sheet filenames. References where the league will upload data
+sbc_sheet <- '16VpwbSKXdvtYmaj3_a2FWaGmwK6cs4CQ8Jz0SeBU0kE'
+pbc_sheet <- '1cnN2URqvyCyvowX0KZvQcnIk8ISP8wodsPhbzHRMVwY'
+nbc_sheet <- '1uvjxMS-w8-NwcT0r4uFc03p0JabwsN4z00j9pPheBKk'
+mvp_sheet <- '1B9f-kYwmbL-MQuINmtDaEhhRtZ8kNT0-ffTqs5SZnfU'
+vbc_sheet <- ''
+
+# Setting up a dictionary type equivalency for league ID. These should never change.
+leagues <- vector(mode ="list", length=5)
+names(leagues) <- c('SBC','PBC','NBC','MVP','VBC')
+leagues[['SBC']] <- 145
+leagues[['PBC']] <- 146
+leagues[['NBC']] <- 153
+leagues[['MVP']] <- 153
+leagues[['VBC']] <- 152
+
+# Setting up a dictionary type equivalency for opening day. Only need to change the opening days.
+openday <- vector(mode ="list", length=5)
+names(openday) <- c('SBC','PBC','NBC','MVP','VBC')
+openday[['SBC']] <- '2037-03-29'
+openday[['PBC']] <- '2029-04-02'
+openday[['NBC']] <- '2023-04-11'
+openday[['MVP']] <- '2023-03-30'
+openday[['VBC']] <- '2028-04-03'
+
+# No need to update these case statements. They simply assign variables based on selection of league
+# that get used elsewhere. If a new league is needed to be added or changed, the filepath needs to be shifted.
+
+dir <- case_when(
+league == 'SBC' ~ "~/Out of the Park Developments/OOTP Baseball 21/saved_games/SBC.lg/import_export/csv/",
+league == 'NBC' ~ "~/Out of the Park Developments/OOTP Baseball 21/saved_games/NBC.lg/import_export/csv/",
+league == 'MVP' ~ "~/Out of the Park Developments/OOTP Baseball 21/saved_games/MVP.lg/import_export/csv/",
+league == 'PBC' ~ "~/Out of the Park Developments/OOTP Baseball 21/saved_games/PBC.lg/import_export/csv/",
+league == 'VBC' ~ "~/Out of the Park Developments/OOTP Baseball 21/saved_games/VBC.lg/import_export/csv/")
+
+act_league <- case_when(
+league == 'SBC' ~ leagues$SBC,
+league == 'NBC' ~ leagues$NBC,
+league == 'MVP' ~ leagues$MVP,
+league == 'PBC' ~ leagues$PBC,
+league == 'VBC' ~ leagues$VBC
+)
+
+act_sheet <- case_when(
+league == 'SBC' ~ sbc_sheet,
+league == 'NBC' ~ nbc_sheet,
+league == 'MVP' ~ mvp_sheet,
+league == 'PBC' ~ pbc_sheet,
+league == 'VBC' ~ vbc_sheet
+)
+
+opening_day <- case_when(
+league == 'SBC' ~ openday$SBC,
+league == 'NBC' ~ openday$NBC,
+league == 'MVP' ~ openday$MVP,
+league == 'PBC' ~ openday$PBC,
+league == 'VBC' ~ openday$VBC
+)
+
+# Dataset import from the CSV files in the file directory based off of league selection. 
+
+files<-list.files(path = dir, pattern=".csv$")
+data<-list()
+for (i in 1:length(files)){
+data[[i]]<-read.csv(paste0(dir,files[i]))}
+names(data)<-files
+```
+
+```{r}
+# Creating the comp balance draft sheets for the leagues.
+
+playoffs <- data$team_history.csv %>%
+  filter(year == season, league_id == act_league) %>%
+  select(team_id, made_playoffs)
+
+
+comp_balance <- data$team_history_financials.csv %>%
+  filter(year == season, league_id == act_league) %>%
+  left_join(data$teams.csv, by = c('team_id','sub_league_id','division_id')) %>%
+  left_join(playoffs, by = 'team_id') %>%
+  mutate(
+    team = paste0(name, " ", nickname),
+    revenue = gate_revenue + season_ticket_revenue + media_revenue + merchandising_revenue + playoff_revenue,
+    market_size = market,
+    playoffs = made_playoffs) %>%
+  select(team, revenue, market_size,playoffs) %>%
+  arrange(desc(revenue))
+
+if(league %in% c('SBC','PBC')){
+  sheet_write(comp_balance, ss = act_sheet, sheet = 'Comp Balance Data')
+}
+
+```
+
+```{r}
+
+teams <- data$teams.csv %>%
+  filter(league_id == act_league, team_id < 80) %>%
+  mutate(
+    league = case_when(sub_league_id == 0 ~ league_al_name, sub_league_id == 1 ~ league_nl_name),
+    division = division_id,
+    name = paste0(name," ",nickname)
+    ) %>%
+  select(team_id,name,league,division) %>%
+  arrange(league, division, name)
+
+home <- data$games.csv %>%
+  filter(league_id == act_league, as.Date(date) <= as.Date(curr_date), as.Date(date) >= as.Date(opening_day), game_type == 0) %>%
+  mutate(
+    home_id = home_team,
+    runs_home = runs1,
+    hits_home = hits1,
+    errors_home = errors1,
+    date = as.Date(date)) %>%
+  select(game_id, home_id, date, runs_home, hits_home, errors_home, innings)
+
+
+away <- data$games.csv %>%
+  filter(league_id == act_league, as.Date(date) <= as.Date(curr_date), as.Date(date) >= as.Date(opening_day), game_type == 0) %>%
+  mutate(
+    away_id = away_team,
+    runs_away = runs0,
+    hits_away = hits0,
+    errors_away = errors0,
+    date = as.Date(date)) %>%
+  select(game_id, away_id, runs_away, hits_away, errors_away)
+
+games <- home %>%
+  left_join(away, by = 'game_id') %>%
+  left_join(teams, by = c("home_id" = "team_id")) %>%
+  left_join(teams, by = c("away_id" = "team_id")) %>%
+  filter(date <= curr_date) %>%
+  mutate(
+    home_team = name.x,
+    away_team = name.y,
+    home_win = case_when(runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_loss = case_when(runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_win = case_when(runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_loss = case_when(runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_div_win = case_when(division.x == division.y & league.x == league.y & runs_home > runs_away ~ 1, TRUE ~ 0 ),
+    home_div_loss = case_when(division.x == division.y & league.x == league.y & runs_home < runs_away ~ 1, TRUE ~ 0 ),
+    away_div_win = case_when(division.x == division.y & league.x == league.y & runs_home < runs_away ~ 1, TRUE ~ 0 ),
+    away_div_loss = case_when(division.x == division.y & league.x == league.y & runs_home > runs_away ~ 1, TRUE ~ 0 ),
+    home_conf_win = case_when(league.x == league.y & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_conf_loss = case_when(league.x == league.y & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_conf_win = case_when(league.x == league.y & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_conf_loss = case_when(league.x == league.y & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_inter_win = case_when(league.x != league.y & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_inter_loss = case_when(league.x != league.y & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_inter_win = case_when(league.x != league.y & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_inter_loss = case_when(league.x != league.y & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_extra_win = case_when(innings > 9 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_extra_loss = case_when(innings > 9 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_extra_win = case_when(innings > 9 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_extra_loss = case_when(innings > 9 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_one_win = case_when(abs(runs_home - runs_away) == 1 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_one_loss = case_when(abs(runs_home - runs_away) == 1 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_one_win = case_when(abs(runs_home - runs_away) == 1 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_one_loss = case_when(abs(runs_home - runs_away) == 1 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_two_win = case_when(abs(runs_home - runs_away) == 2 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_two_loss = case_when(abs(runs_home - runs_away) == 2 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_two_win = case_when(abs(runs_home - runs_away) == 2 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_two_loss = case_when(abs(runs_home - runs_away) == 2 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_three_win = case_when(abs(runs_home - runs_away) == 3 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_three_loss = case_when(abs(runs_home - runs_away) == 3 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_three_win = case_when(abs(runs_home - runs_away) == 3 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_three_loss = case_when(abs(runs_home - runs_away) == 3 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_four_win = case_when(abs(runs_home - runs_away) > 3 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_four_loss = case_when(abs(runs_home - runs_away) > 3 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_four_win = case_when(abs(runs_home - runs_away) > 3 & runs_home < runs_away ~ 1, TRUE ~ 0),
+    away_four_loss = case_when(abs(runs_home - runs_away) > 3 & runs_home > runs_away ~ 1, TRUE ~ 0),
+    home_runs_scored = runs_home,
+    home_runs_allowed = runs_away,
+    away_runs_scored = runs_away,
+    away_runs_allowed = runs_home,
+    home_hits_scored = hits_home,
+    home_hits_allowed = hits_away,
+    away_hits_scored = hits_away,
+    away_hits_allowed = hits_home,
+    home_errors_scored = errors_home,
+    home_errors_allowed = errors_away,
+    away_errors_scored = errors_away,
+    away_errors_allowed = errors_home,
+    gap = abs(runs_home - runs_away),
+    extras = case_when(innings > 9 ~ 1, innings <=9 ~ 0)) %>%
+  select(-home_id, -away_id)
+
+
+home_standings <- games %>%
+  select(contains("home")) %>%
+  group_by(home_team) %>%
+  summarise_if(is.numeric,sum) %>%
+   mutate(
+    team = home_team,
+    wins = home_win,
+    losses = home_loss,
+    runs_scored = home_runs_scored,
+    runs_allowed = home_runs_allowed,
+    run_diff = home_runs_scored - home_runs_allowed,
+    hits = home_hits_scored,
+    hits_allowed = home_hits_allowed,
+    errors = home_errors_scored,
+    errors_allowed = home_errors_allowed,
+    div_wins = home_div_win,
+    div_loss = home_div_loss,
+    conf_wins = home_conf_win,
+    conf_loss = home_conf_loss,
+    interleague_win = home_inter_win,
+    interleague_loss = home_inter_loss,
+    one_run_win = home_one_win,
+    one_run_loss = home_one_loss,
+    two_run_win = home_two_win,
+    two_run_loss = home_two_loss,
+    three_run_win = home_three_win,
+    three_run_loss = home_three_loss,
+    four_run_win = home_four_win,
+    four_run_loss = home_four_loss,
+    extra_wins = home_extra_win, 
+    extra_loss = home_extra_loss) %>%
+  select(team, wins, losses, runs_scored, runs_allowed, run_diff, hits, hits_allowed, errors, errors_allowed, div_wins, div_loss, conf_wins, conf_loss, interleague_win, interleague_loss, one_run_win, one_run_loss, two_run_win, two_run_loss, three_run_win, three_run_loss, four_run_win, four_run_loss, extra_wins, extra_loss) %>%
+  arrange(team)
+
+away_standings <- games %>%
+  select(contains("away")) %>%
+  group_by(away_team) %>%
+  summarise_if(is.numeric,sum) %>%
+   mutate(
+    team = away_team,
+    wins = away_win,
+    losses = away_loss,
+    runs_scored = away_runs_scored,
+    runs_allowed = away_runs_allowed,
+    run_diff = away_runs_scored - away_runs_allowed,
+    hits = away_hits_scored,
+    hits_allowed = away_hits_allowed,
+    errors = away_errors_scored,
+    errors_allowed = away_errors_allowed,
+    div_wins = away_div_win,
+    div_loss = away_div_loss,
+    conf_wins = away_conf_win,
+    conf_loss = away_conf_loss,
+    interleague_win = away_inter_win,
+    interleague_loss = away_inter_loss,
+    one_run_win = away_one_win,
+    one_run_loss = away_one_loss,
+    two_run_win = away_two_win,
+    two_run_loss = away_two_loss,
+    three_run_win = away_three_win,
+    three_run_loss = away_three_loss,
+    four_run_win = away_four_win,
+    four_run_loss = away_four_loss,
+    extra_wins = away_extra_win, 
+    extra_loss = away_extra_loss) %>%
+  select(team, wins, losses, runs_scored, runs_allowed, run_diff, hits, hits_allowed, errors, errors_allowed, div_wins, div_loss, conf_wins, conf_loss, interleague_win, interleague_loss, one_run_win, one_run_loss, two_run_win, two_run_loss, three_run_win, three_run_loss, four_run_win, four_run_loss, extra_wins, extra_loss) %>%
+  arrange(team)
+
+league_standings <- merge(home_standings, away_standings, all = TRUE) %>%
+  group_by(team) %>%
+  summarise_if(is.numeric, sum)
+
+
+sheet_write(home_standings, ss = act_sheet, sheet = 'Home Standings Data')
+sheet_write(away_standings, ss = act_sheet, sheet = 'Away Standings Data')
+sheet_write(league_standings, ss = act_sheet, sheet = 'League Standings Data')
+
+
+
+```
+```{r}
+View(data$games.csv)
+```
+
+
+```{r}
+
+if(league == 'NBC'){
+
+tourney_games <- games %>%
+  filter(date >= tourney_start & date <= tourney_end)
+
+home_tourney <- tourney_games %>%
+  select(contains("home")) %>%
+  group_by(home_team) %>%
+  summarise_if(is.numeric,sum) %>%
+   mutate(
+    team = home_team,
+    wins = home_win,
+    losses = home_loss,
+    runs_scored = home_runs_scored,
+    runs_allowed = home_runs_allowed,
+    run_diff = home_runs_scored - home_runs_allowed,
+    hits = home_hits_scored,
+    hits_allowed = home_hits_allowed,
+    errors = home_errors_scored,
+    errors_allowed = home_errors_allowed,
+    div_wins = home_div_win,
+    div_loss = home_div_loss,
+    conf_wins = home_conf_win,
+    conf_loss = home_conf_loss,
+    interleague_win = home_inter_win,
+    interleague_loss = home_inter_loss,
+    one_run_win = home_one_win,
+    one_run_loss = home_one_loss,
+    two_run_win = home_two_win,
+    two_run_loss = home_two_loss,
+    three_run_win = home_three_win,
+    three_run_loss = home_three_loss,
+    four_run_win = home_four_win,
+    four_run_loss = home_four_loss,
+    extra_wins = home_extra_win, 
+    extra_loss = home_extra_loss) %>%
+  select(team, wins, losses, runs_scored, runs_allowed, run_diff, hits, hits_allowed, errors, errors_allowed, div_wins, div_loss, conf_wins, conf_loss, interleague_win, interleague_loss, one_run_win, one_run_loss, two_run_win, two_run_loss, three_run_win, three_run_loss, four_run_win, four_run_loss, extra_wins, extra_loss) %>%
+  arrange(team)
+
+away_tourney <- tourney_games %>%
+  select(contains("away")) %>%
+  group_by(away_team) %>%
+  summarise_if(is.numeric,sum) %>%
+   mutate(
+    team = away_team,
+    wins = away_win,
+    losses = away_loss,
+    runs_scored = away_runs_scored,
+    runs_allowed = away_runs_allowed,
+    run_diff = away_runs_scored - away_runs_allowed,
+    hits = away_hits_scored,
+    hits_allowed = away_hits_allowed,
+    errors = away_errors_scored,
+    errors_allowed = away_errors_allowed,
+    div_wins = away_div_win,
+    div_loss = away_div_loss,
+    conf_wins = away_conf_win,
+    conf_loss = away_conf_loss,
+    interleague_win = away_inter_win,
+    interleague_loss = away_inter_loss,
+    one_run_win = away_one_win,
+    one_run_loss = away_one_loss,
+    two_run_win = away_two_win,
+    two_run_loss = away_two_loss,
+    three_run_win = away_three_win,
+    three_run_loss = away_three_loss,
+    four_run_win = away_four_win,
+    four_run_loss = away_four_loss,
+    extra_wins = away_extra_win, 
+    extra_loss = away_extra_loss) %>%
+  select(team, wins, losses, runs_scored, runs_allowed, run_diff, hits, hits_allowed, errors, errors_allowed, div_wins, div_loss, conf_wins, conf_loss, interleague_win, interleague_loss, one_run_win, one_run_loss, two_run_win, two_run_loss, three_run_win, three_run_loss, four_run_win, four_run_loss, extra_wins, extra_loss) %>%
+  arrange(team)
+
+
+tourney_standings <- merge(home_tourney, away_tourney, all = TRUE) %>%
+  group_by(team) %>%
+  summarise_if(is.numeric, sum)
+
+game_ids <- games %>% 
+  filter(date < curr_date & date >= opening_day) %>%
+  select(game_id)
+
+tourney_game_ids <- tourney_games %>% 
+  filter(date < curr_date) %>%
+  select(game_id)
+
+season_batting <- game_ids %>%
+  left_join(data$players_game_batting.csv, by='game_id') %>%
+  select(game_id,ab, h, d, t, hr, bb, hp, sf) %>%
+  summarise_each(funs(sum)) %>%
+  mutate(lgavg = round((h/ab),3),
+       lgobp = round((h+bb+hp)/(ab+bb+hp+sf),3),
+       lgslg = round(((h-d-t-hr) + (d*2) + (t*3) + (hr*4))/(ab),3)) %>%
+  select(lgavg, lgobp, lgslg)
+
+
+season_pitching <- game_ids %>%
+  left_join(data$players_game_pitching_stats.csv, by='game_id') %>%
+  select(game_id, hra, bb, hp, k, ip, er) %>%
+  mutate(lghr = mean(hra),
+         lgbb = mean(bb),
+         lghbp = mean(hp),
+         lgk = mean(k),
+         lgip = mean(ip), 
+         lger = sum(er)) %>%
+  select(lghr, lgbb, lghbp, lgk, lgip, lger)
+
+league_era <- game_ids %>%
+  left_join(data$players_game_pitching_stats.csv, by='game_id') %>%
+  select(game_id, ip, er) %>%
+  summarise_each(funs(sum)) %>%
+  mutate(lgera = (9*er)/ip) %>%
+  select(lgera)
+
+lgavg <- season_batting$lgavg
+lgobp <- season_batting$lgobp
+lgslg <- season_batting$lgslg
+lghr <- round(mean(season_pitching$lghr),3)
+lgbb <- round(mean(season_pitching$lgbb),3)
+lghbp <- round(mean(season_pitching$lghbp),3)
+lgk <- round(mean(season_pitching$lgk),3)
+lgip <- round(mean(season_pitching$lgip),3)
+lgera <- round(league_era$lgera,3)
+fipc <- lgera - ((13*lghr)+(3*(lgbb+lghbp))-(2*lgk))/lgip
+
+tourney_batting <- tourney_game_ids %>%
+  left_join(data$players_game_batting.csv, by='game_id') %>%
+  select(player_id, team_id, ab, h, d, t, hr, bb, hp, sf, wpa) %>%
+  group_by(player_id, team_id) %>%
+  summarise_each(funs(sum)) %>%
+  left_join(select(data$teams, 'team_id', 'abbr'), by = 'team_id') %>%
+  left_join(select(data$players.csv, 'player_id','first_name','last_name'), by = 'player_id') %>%
+  mutate(avg = round((h/ab),3),
+       obp = round((h+bb+hp)/(ab+bb+hp+sf),3),
+       slg = round(((h-d-t-hr) + (d*2) + (t*3) + (hr*4))/(ab),3),
+       singles = h-d-t-hr,
+       doubles = d,
+       triples = t,
+       homeruns = hr,
+       xbh = (d+t+hr),
+       win_prob = round(wpa,3),
+       ops_plus = round(((obp/lgobp) + (slg/lgslg) -1) * 100,0),
+       player_name = paste(first_name, last_name, sep = " "),
+       team_name = abbr) %>%
+  ungroup() %>%
+  select(player_name, team_name, ab, avg, obp, slg, singles, doubles, triples, homeruns, xbh ,ops_plus, win_prob) %>%
+  filter(ab >= ((length(tourney_game_ids$game_id) / 12) +2))
+
+names(tourney_batting) <- toupper(names(tourney_batting))
+
+# tourney_pitching <- tourney_game_ids %>%
+#   left_join(data$players_game_pitching.csv, by='game_id') %>%
+#   select(player_id, team_id, position, ab, h, d, t, hr, bb, hp, sf, wpa) %>%
+#   group_by(player_id, team_id, position) %>%
+#   summarise_each(funs(sum)) %>%
+#   left_join(select(data$teams, 'team_id', 'name', 'nickname'), by = 'team_id') %>%
+#   left_join(select(data$players.csv, 'player_id','first_name','last_name'), by = 'player_id') %>%
+#   mutate(avg = round((h/ab),3),
+#        obp = round((h+bb+hp)/(ab+bb+hp+sf),3),
+#        slg = round(((h-d-t-hr) + (d*2) + (t*3) + (hr*4))/(ab),3),
+#        singles = h-d-t-hr,
+#        doubles = d,
+#        triples = t,
+#        homeruns = hr,
+#        xbh = (d+t+hr),
+#        win_prob_added = round(wpa,3),
+#        player_name = paste(first_name, last_name, sep = " "),
+#        team_name = paste(name, nickname, sep = " ")) %>%
+#   ungroup() %>%
+#   select(player_name, team_name, ab, avg, obp, slg, singles, doubles, triples, homeruns, xbh ,win_prob_added) %>%
+#   filter(ab >= min_ab)
+
+sheet_write(home_tourney, ss = act_sheet, sheet = 'Home Tourney Data')
+sheet_write(away_tourney, ss = act_sheet, sheet = 'Away Tourney Data')
+sheet_write(tourney_standings, ss = act_sheet, sheet = 'League Tourney Data')
+sheet_write(tourney_batting, ss = act_sheet, sheet = 'Tourney Batters')
+}
+```
+
+```{r}
+
+pitchers <- data$players_game_pitching_stats.csv
+
+```
+
+```{r}
+pitchers$li_scaled <- scale(pitchers$li)
+view(pitchers)
+```
+

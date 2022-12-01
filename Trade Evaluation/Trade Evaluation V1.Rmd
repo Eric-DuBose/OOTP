@@ -1,0 +1,204 @@
+---
+  title: "SBC Data"
+author: "Eric DuBose"
+date: "10/21/2020"
+output: html_document
+---
+  
+```{r setup, include=FALSE}
+library(tidyverse)
+library(reshape2)
+rm(list = ls())
+ootp_dir <- 'C:/Users/night/OneDrive/Documents/Out of the Park Developments/OOTP Baseball 21/saved_games/MVP.lg/import_export/csv'
+```
+
+```{r}
+leagues <- read.csv(paste0(ootp_dir,'/leagues.csv'))
+players <- read.csv(paste0(ootp_dir,'/players.csv'))
+batting <- read.csv(paste0(ootp_dir,'/players_career_batting_stats.csv'))
+fielding <- read.csv(paste0(ootp_dir,'/players_career_fielding_stats.csv'))
+pitchers <- read.csv(paste0(ootp_dir,'/players_career_pitching_stats.csv'))
+teams <- read.csv(paste0(ootp_dir,'/teams.csv'))
+trades <- read.csv(paste0(ootp_dir,'/trade_history.csv'))
+```
+
+```{r}
+trades$trade_id <- paste0(1:nrow(trades))
+league_list <- pull(leagues['league_id'])
+```
+
+```{r}
+league_era <- pitchers %>% 
+  filter(split_id == 1, league_id > 0, year > 2017) %>%
+  group_by(league_id, year) %>%
+  summarise(er = sum(er), ip = sum(ip),.groups = 'drop') %>%
+  mutate(lg_era = round((9*er)/ip,2)) %>%
+  left_join(leagues, by='league_id') %>%
+  mutate(league = name) %>%
+  select(year, league_id, league, lg_era)
+
+pitchers <- pitchers %>%
+  left_join(league_era, by = c('year','league_id')) %>%
+  filter(split_id == 1, year > 2017) %>%
+  mutate(era = round((9*er)/ip,2),
+         era_plus = round(((lg_era)/((9*er)/ip))*100,0)) %>%
+  select(player_id, year, team_id, league, league_id, level_id, er, ip, era, lg_era, era_plus, war)
+```
+
+```{r}
+team_1_pre <- tibble(melt(trades %>% select(trade_id,date, team_id_0, player_id_0_0, player_id_0_1, player_id_0_2, player_id_0_3, player_id_0_4),id.vars=c('trade_id','date','team_id_0'),value.name = 'player_id')) %>% mutate(trade_id = as.numeric(trade_id), team_id = team_id_0, trade_date = as.Date(date)) %>% select(trade_id, team_id, trade_date, player_id) %>% arrange(trade_id)
+
+team_2_pre <- tibble(melt(trades %>% select(trade_id,date, team_id_1, player_id_1_0, player_id_1_1, player_id_1_2, player_id_1_3, player_id_1_4),id.vars=c('trade_id','date','team_id_1'),value.name = 'player_id')) %>% mutate(trade_id = as.numeric(trade_id), team_id = team_id_1, trade_date = as.Date(date)) %>% select(trade_id, team_id, trade_date, player_id) %>% arrange(trade_id)
+
+team_1_post <- tibble(melt(trades %>% select(trade_id,date, team_id_1, player_id_0_0, player_id_0_1, player_id_0_2, player_id_0_3, player_id_0_4),id.vars=c('trade_id','date','team_id_1'),value.name = 'player_id')) %>% mutate(trade_id = as.numeric(trade_id), team_id = team_id_1, trade_date = as.Date(date)) %>% select(trade_id, team_id, trade_date, player_id) %>% arrange(trade_id)
+
+team_2_post <- tibble(melt(trades %>% select(trade_id,date, team_id_0, player_id_1_0, player_id_1_1, player_id_1_2, player_id_1_3, player_id_1_4),id.vars=c('trade_id','date','team_id_0'),value.name = 'player_id')) %>% mutate(trade_id = as.numeric(trade_id), team_id = team_id_0, trade_date = as.Date(date)) %>% select(trade_id, team_id, trade_date, player_id) %>% arrange(trade_id)
+```
+
+
+```{r}
+adjust_team <- function(team){
+  team %>%
+  filter(player_id > 0) %>%
+  left_join(players, by = c('value' = 'player_id'), suffix = c("","")) %>%
+  mutate(dob = as.Date(date_of_birth),
+      player_id = value,
+       name = paste(first_name, last_name),
+       position = case_when(
+         position == 1 ~ 'P',
+         position == 2 ~ 'C',
+         position == 3 ~ '1B',
+         position == 4 ~ '2B',
+         position == 5 ~ '3B',
+         position == 6 ~ 'SS',
+         position == 7 ~ 'LF',
+         position == 8 ~ 'CF',
+         position == 9 ~ 'RF')) %>%
+  left_join(teams,by='team_id') %>%
+  mutate(team = paste(name.y,nickname),
+         player = name.x,
+         dob = date_of_birth)
+}
+```
+
+```{r}
+test <- team_1_pre %>%
+  left_join(players, by = 'player_id') %>%
+  mutate(dob = as.Date(date_of_birth),
+       name = paste(first_name, last_name),
+       team_id = team_id.x,
+       position = case_when(
+         position == 1 ~ 'P',
+         position == 2 ~ 'C',
+         position == 3 ~ '1B',
+         position == 4 ~ '2B',
+         position == 5 ~ '3B',
+         position == 6 ~ 'SS',
+         position == 7 ~ 'LF',
+         position == 8 ~ 'CF',
+         position == 9 ~ 'RF')) %>%
+  left_join(teams,by='team_id') %>%
+  arrange(trade_id)
+colnames(test)
+```
+
+
+```{r}
+adj_1_pre <- adjust_team(team_1_pre)
+adj_2_pre <- adjust_team(team_2_pre)
+adj_1_post <- adjust_team(team_1_post)
+adj_2_post <- adjust_team(team_1_post)
+```
+
+
+```{r}
+trade_1_teams <- trades_team_1 %>%
+  left_join(teams,by='team_id') %>%
+  mutate(team = paste(name.y,nickname),
+         player = name.x,
+         dob = date_of_birth) %>%
+  select(trade_id, team_id, player_id, league_id, level, parent_team_id, human_id, trade_date, team, player, position, dob)
+
+```
+
+```{r}
+head(trade_1_teams)
+```
+
+
+```{r batting stat combinations}
+trade_1_batting <- trades_team_1 %>%
+  left_join(batting, by = c('player_id')) %>%
+  filter(split_id == 1, year > 2017) %>%
+  mutate(position = position.x,
+         batter_war = war,
+         parent_team = team_id.x,
+         team = team_id.y,
+         age = year - as.numeric(format(date_of_birth,'%Y'))) %>%
+  select(trade_id, player_id, league_id, level_id, name, age, position, trade_date, parent_team, team, year, batter_war)
+
+trade_1_new_batting <- trades_new_team_1 %>%
+  left_join(batting, by = c('player_id')) %>%
+  filter(split_id == 1, year > 2017) %>%
+  mutate(position = position.x,
+         batter_war = war,
+         parent_team = team_id.x,
+         team = team_id.y,
+         age = year - as.numeric(format(date_of_birth,'%Y'))) %>%
+  select(trade_id, player_id, league_id, level_id, name, age, position, trade_date, parent_team, team, year, batter_war)
+
+trade_2_batting <- trades_team_2 %>%
+  left_join(batting, by = c('player_id')) %>%
+  filter(split_id == 1, year > 2017) %>%
+  mutate(position = position.x,
+         batter_war = war,
+         parent_team = team_id.x,
+         team = team_id.y,
+         age = year - as.numeric(format(date_of_birth,'%Y'))) %>%
+  select(trade_id, player_id, league_id, level_id, name, age, position, trade_date, parent_team, team, year, batter_war)
+
+trade_2_new_batting <- trades_new_team_2 %>%
+  left_join(batting, by = c('player_id')) %>%
+  filter(split_id == 1, year > 2017) %>%
+  mutate(position = position.x,
+         batter_war = war,
+         parent_team = team_id.x,
+         team = team_id.y,
+         age = year - as.numeric(format(date_of_birth,'%Y'))) %>%
+  select(trade_id, player_id, league_id, level_id, name, age, position, trade_date, parent_team, team, year, batter_war)
+```
+
+```{r}
+sum(trade_1_batting$batter_war)
+```
+
+
+
+
+
+
+
+
+
+```{r}
+trade_1_pitching <- trades_team_1 %>%
+  left_join(pitching, by = 'player_id') %>%
+  mutate(position = position,
+         pitcher_war = war,
+         parent_team = team_id.x,
+         team = team_id.y,
+         age = year - as.numeric(format(date_of_birth,'%Y'))) %>%
+  select(trade_id, player_id, league_id, level_id, year, name, age, position, trade_date, parent_team, team, ip, er, era, era_plus, pitcher_war)
+
+trade_2_pitching <- trades_team_2 %>%
+  left_join(pitching, by = 'player_id') %>%
+  mutate(position = position,
+         pitcher_war = war,
+         parent_team = team_id.x,
+         team = team_id.y,
+         age = year - as.numeric(format(date_of_birth,'%Y'))) %>%
+  select(trade_id, player_id, league_id, level_id, year, name, age, position, trade_date, parent_team, team, ip, er, era, era_plus, pitcher_war)
+
+
+```
+
